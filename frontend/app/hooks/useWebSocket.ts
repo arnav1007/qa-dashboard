@@ -1,0 +1,112 @@
+/**
+ * Custom hook for WebSocket connection and real-time updates
+ */
+import { useEffect, useRef, useCallback } from 'react'
+import { useAppDispatch } from '../store/hooks'
+import { addQuestion, updateQuestion, addResponse } from '../features/questionsSlice'
+
+const getWebSocketURL = () => {
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+  return apiUrl.replace(/^http/, 'ws') + '/ws'
+}
+
+const WS_URL = getWebSocketURL()
+const RECONNECT_DELAY = 3000 // 3 seconds
+
+export const useWebSocket = () => {
+  const dispatch = useAppDispatch()
+  const wsRef = useRef<WebSocket | null>(null)
+  const reconnectTimeoutRef = useRef<NodeJS.Timeout>()
+  const isConnecting = useRef(false)
+
+  const connect = useCallback(() => {
+    // Prevent multiple simultaneous connection attempts
+    if (isConnecting.current || (wsRef.current && wsRef.current.readyState === WebSocket.OPEN)) {
+      return
+    }
+
+    isConnecting.current = true
+
+    try {
+      const ws = new WebSocket(WS_URL)
+
+      ws.onopen = () => {
+        console.log('WebSocket connected')
+        isConnecting.current = false
+        // Clear any pending reconnection attempts
+        if (reconnectTimeoutRef.current) {
+          clearTimeout(reconnectTimeoutRef.current)
+        }
+      }
+
+      ws.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data)
+          console.log('WebSocket message received:', message)
+
+          switch (message.type) {
+            case 'new_question':
+              dispatch(addQuestion(message.data))
+              break
+            case 'question_updated':
+              dispatch(updateQuestion(message.data))
+              break
+            case 'new_response':
+              dispatch(addResponse(message.data))
+              break
+            default:
+              console.log('Unknown message type:', message.type)
+          }
+        } catch (error) {
+          console.error('Error parsing WebSocket message:', error)
+        }
+      }
+
+      ws.onerror = (error) => {
+        console.error('WebSocket error:', error)
+        isConnecting.current = false
+      }
+
+      ws.onclose = () => {
+        console.log('WebSocket disconnected, attempting to reconnect...')
+        isConnecting.current = false
+        wsRef.current = null
+        
+        // Attempt to reconnect after delay
+        reconnectTimeoutRef.current = setTimeout(() => {
+          connect()
+        }, RECONNECT_DELAY)
+      }
+
+      wsRef.current = ws
+    } catch (error) {
+      console.error('Error creating WebSocket:', error)
+      isConnecting.current = false
+      
+      // Retry connection
+      reconnectTimeoutRef.current = setTimeout(() => {
+        connect()
+      }, RECONNECT_DELAY)
+    }
+  }, [dispatch])
+
+  useEffect(() => {
+    connect()
+
+    // Cleanup on unmount
+    return () => {
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current)
+      }
+      if (wsRef.current) {
+        wsRef.current.close()
+        wsRef.current = null
+      }
+    }
+  }, [connect])
+
+  return {
+    isConnected: wsRef.current?.readyState === WebSocket.OPEN,
+  }
+}
+
