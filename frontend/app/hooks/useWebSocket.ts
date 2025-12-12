@@ -7,7 +7,12 @@ import { addQuestion, updateQuestion, addResponse } from '../features/questionsS
 
 const getWebSocketURL = () => {
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-  return apiUrl.replace(/^http/, 'ws') + '/ws'
+  // If page is loaded over HTTPS, use wss://, otherwise ws://
+  const isSecure = typeof window !== 'undefined' && window.location.protocol === 'https:'
+  const protocol = isSecure ? 'wss' : 'ws'
+  // Replace http/https with ws/wss
+  const wsUrl = apiUrl.replace(/^https?/, protocol) + '/ws'
+  return wsUrl
 }
 
 const WS_URL = getWebSocketURL()
@@ -20,6 +25,16 @@ export const useWebSocket = () => {
   const isConnecting = useRef(false)
 
   const connect = useCallback(() => {
+    // Skip WebSocket connection if API URL is HTTP and page is HTTPS
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+    const isApiHttp = apiUrl.startsWith('http://')
+    const isPageHttps = typeof window !== 'undefined' && window.location.protocol === 'https:'
+    
+    if (isApiHttp && isPageHttps) {
+      console.warn('WebSocket disabled: Cannot connect from HTTPS to HTTP endpoint')
+      return
+    }
+    
     // Prevent multiple simultaneous connection attempts
     if (isConnecting.current || (wsRef.current && wsRef.current.readyState === WebSocket.OPEN)) {
       return
